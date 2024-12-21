@@ -51,6 +51,9 @@ STEP_MAIN_DATA_SCHEMA = vol.Schema(  # pylint: disable=invalid-name
                 domain=[SENSOR_DOMAIN, INPUT_DATETIME_DOMAIN]
             ),
         ),
+        vol.Required(CONF_HUMIDITY_SENSOR): selector.EntitySelector(
+            selector.EntitySelectorConfig(domain=[SENSOR_DOMAIN, INPUT_NUMBER_DOMAIN]),
+        ),
         vol.Required(CONF_CYCLE_MIN, default=5): cv.positive_int,
         vol.Optional(CONF_DEVICE_POWER, default="1"): vol.Coerce(float),
         vol.Required(CONF_USE_MAIN_CENTRAL_CONFIG, default=True): cv.boolean,

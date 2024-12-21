@@ -224,6 +224,7 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
         self._underlyings: list[T] = []
 
         self._ema_temp = None
+        self._humidity = None
         self._ema_algo = None
         self._now = None
 
@@ -340,6 +341,7 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
         self._last_seen_temp_sensor_entity_id = entry_infos.get(
             CONF_LAST_SEEN_TEMP_SENSOR
         )
+        self._humidity_sensor_entity_id = entry_infos.get(CONF_HUMIDITY_SENSOR)
         self._ext_temp_sensor_entity_id = entry_infos.get(CONF_EXTERNAL_TEMP_SENSOR)
         self._power_sensor_entity_id = entry_infos.get(CONF_POWER_SENSOR)
         self._max_power_sensor_entity_id = entry_infos.get(CONF_MAX_POWER_SENSOR)
@@ -533,6 +535,15 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
                 )
             )
 
+        if self._humidity_sensor_entity_id:
+            self.async_on_remove(
+                async_track_state_change_event(
+                    self.hass,
+                    [self._humidity_sensor_entity_id],
+                    self._async_humidity_changed,
+                )
+            )
+
         if self._ext_temp_sensor_entity_id:
             self.async_on_remove(
                 async_track_state_change_event(
@@ -633,6 +644,19 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
             )
             await self._async_update_temp(temperature_state)
             need_write_state = True
+
+        if self._humidity_sensor_entity_id:
+            humidity_state = self.hass.states.get(self._humidity_sensor_entity_id)
+            if humidity_state and humidity_state.state not in (
+                STATE_UNAVAILABLE,
+                STATE_UNKNOWN,
+            ):
+                _LOGGER.debug(
+                    "%s - humidity sensor have been retrieved: %.1f",
+                    self,
+                    float(humidity_state.state),
+                )
+                await self._async_update_humidity(humidity_state)
 
         if self._ext_temp_sensor_entity_id:
             ext_temperature_state = self.hass.states.get(
@@ -955,6 +979,11 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
     def ema_temperature(self) -> str:
         """Return the EMA temperature."""
         return self._ema_temp
+    
+    @property
+    def humidity(self) -> str:
+        """Return the humidity."""
+        return self._humidity
 
     @property
     def hvac_mode(self) -> HVACMode | None:
@@ -1549,6 +1578,20 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
                 err,
             )
 
+    @callback
+    async def _async_humidity_changed(self, event: Event):
+        """Handle humidity of the humidity sensor changes."""
+        new_state: State = event.data.get("new_state")
+        _LOGGER.debug(
+            "%s - Humidity changed. Event.new_state is %s",
+            self,
+            new_state,
+        )
+        if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return
+        await self._async_update_humidity(new_state)
+        self.recalculate()
+
     async def _async_ext_temperature_changed(self, event: Event):
         """Handle external temperature opf the sensor changes."""
         new_state: State = event.data.get("new_state")
@@ -1816,6 +1859,26 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
 
         except ValueError as ex:
             _LOGGER.error("Unable to update temperature from sensor: %s", ex)
+
+    @callback
+    async def _async_update_humidity(self, state: State):
+        """Update thermostat with latest state from sensor."""
+        try:
+            cur_hum = float(state.state)
+            if math.isnan(cur_hum) or math.isinf(cur_hum):
+                raise ValueError(f"Sensor has illegal state {state.state}")
+            self._humidity = cur_hum
+            _LOGGER.debug(
+                "%s - After setting _humidity %s , state.last_changed.replace=%s",
+                self,
+                self._last_ext_temperature_measure,
+                state.last_changed.astimezone(self._current_tz),
+            )
+            # try to restart if we were in safety mode
+            if self._security_state:
+                await self.check_safety()
+        except ValueError as ex:
+            _LOGGER.error("Unable to update humidity from sensor: %s", ex)
 
     @callback
     async def _async_update_ext_temp(self, state: State):
@@ -2688,6 +2751,7 @@ class BaseThermostat(ClimateEntity, RestoreEntity, Generic[T]):
             "device_actives": self.device_actives,
             "nb_device_actives": self.nb_device_actives,
             "ema_temp": self._ema_temp,
+            "humidity": self._humidity,
             "is_used_by_central_boiler": self.is_used_by_central_boiler,
             "temperature_slope": round(self.last_temperature_slope or 0, 3),
             "hvac_off_reason": self.hvac_off_reason,
